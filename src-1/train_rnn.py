@@ -98,6 +98,26 @@ def evaluate(model, X_test, y_test, scaler_y, device, name="RNN"):
 
     return y_true, pred
 
+def plot_loss(train_l, val_l):
+
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(train_l, label="Train Loss")
+    plt.plot(val_l, label="Validation Loss")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("RNN Training Loss Curve")
+
+    plt.legend()
+    plt.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIG_DIR, "RNN_loss.png"), dpi=300)
+    plt.close()
+
 
 # =========================
 def main():
@@ -136,7 +156,8 @@ def main():
     model = RNNModel(len(feature_cols))
 
     model, tr, vl = train_model(model, train_loader, val_loader, device=device)
-
+    plot_loss(tr, vl)
+    print("✔ RNN损失曲线已生成")
     # ⭐最终论文指标输出
     evaluate(model, X_test, y_test, sy, device, "RNN")
 
