@@ -6,14 +6,15 @@ import io
 from datetime import datetime
 
 import torch
-import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 
 from utils.common import *
+from utils.log import Logger
+
 
 # =========================
-# ⭐中文支持
+# 中文支持
 # =========================
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -23,81 +24,99 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 
 # =========================
-# ⭐路径
+# 路径
 # =========================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIG_DIR = os.path.join(BASE_DIR, "data", "fig")
+
 MODEL_DIR = os.path.join(BASE_DIR, "model")
+FIG_DIR = os.path.join(BASE_DIR, "data", "fig")
 
 os.makedirs(FIG_DIR, exist_ok=True)
 
 
+logger = Logger(BASE_DIR, "compare").get_logger()
+
+
 # =========================
-# ⭐模型定义（必须一致）
+# 模型定义（必须和训练一致）
 # =========================
-class BPNNModel(nn.Module):
+
+class BPNNModel(torch.nn.Module):
     def __init__(self, input_size):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(input_size, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 1)
         )
+
     def forward(self, x):
         return self.net(x)
 
 
-class RNNModel(nn.Module):
-    def __init__(self, input_size, hidden_size=64):
+class RNNModel(torch.nn.Module):
+    def __init__(self, input_size):
         super().__init__()
-        self.rnn = nn.RNN(input_size, hidden_size, batch_first=True)
-        self.fc = nn.Linear(hidden_size, 1)
+        self.rnn = torch.nn.RNN(input_size, 64, batch_first=True)
+        self.fc = torch.nn.Linear(64, 1)
+
     def forward(self, x):
         out, _ = self.rnn(x)
         return self.fc(out[:, -1, :])
 
 
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size=64):
+class LSTMModel(torch.nn.Module):
+    def __init__(self, input_size):
         super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
-        self.fc = nn.Linear(hidden_size, 1)
+        self.lstm = torch.nn.LSTM(input_size, 64, batch_first=True)
+        self.fc = torch.nn.Linear(64, 1)
+
     def forward(self, x):
         out, _ = self.lstm(x)
         return self.fc(out[:, -1, :])
 
 
 # =========================
-# ⭐自动加载最新模型
+# 加载模型（统一安全版）
 # =========================
-def load_latest(model_name, model_class, input_size, device):
+def load_model(model_class, name, input_size, device):
 
-    files = [f for f in os.listdir(MODEL_DIR) if model_name in f]
+    path = os.path.join(MODEL_DIR, f"{name}_best.pth")
 
-    if not files:
-        raise ValueError(f"没有找到 {model_name} 模型")
+    model = model_class(input_size).to(device)
 
-    latest = sorted(files)[-1]
-    path = os.path.join(MODEL_DIR, latest)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"找不到模型: {path}")
 
-    model = model_class(input_size)
-    model.load_state_dict(torch.load(path, map_location=device))
-    model.to(device)
+    state = torch.load(path, map_location=device)
+    model.load_state_dict(state)
+
     model.eval()
 
-    print(f"已加载模型: {path}")
+    logger.info(f"加载模型成功: {path}")
 
     return model
 
 
 # =========================
-# ⭐主函数
+# 评估
+# =========================
+def predict(model, X, device):
+    with torch.no_grad():
+        X = torch.tensor(X, dtype=torch.float32).to(device)
+        return model(X).cpu().numpy()
+
+
+# =========================
+# 主函数
 # =========================
 def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    logger.info(f"使用设备: {device}")
 
     # ========= 数据 =========
     df = load_data("../data/train.xlsx")
@@ -131,106 +150,110 @@ def main():
     train_x, train_y, val_x, val_y, test_x, test_y, scaler_x, scaler_y = \
         normalize_train_val_test(train, val, test, feature_cols, target_col)
 
-    # ========= 构造序列 =========
+    # ========= LSTM需要序列 =========
     seq_len = 90
-    X_test, y_test = create_sequences(test_x, test_y, seq_len)
+    X_test_seq, y_test_seq = create_sequences(test_x, test_y, seq_len)
 
-    X_seq = torch.tensor(X_test, dtype=torch.float32).to(device)
+    # ========= BPNN / RNN直接用 =========
+    X_test_flat = test_x
+    y_test_flat = test_y
 
-    # =========================
-    # ⭐加载模型
-    # =========================
-    bpnn = load_latest("BPNN", BPNNModel, len(feature_cols), device)
-    rnn = load_latest("RNN", RNNModel, len(feature_cols), device)
-    lstm = load_latest("LSTM", LSTMModel, len(feature_cols), device)
+    # ========= 加载模型 =========
+    bpnn = load_model(BPNNModel, "BPNN", len(feature_cols), device)
+    rnn = load_model(RNNModel, "RNN", len(feature_cols), device)
+    lstm = load_model(LSTMModel, "LSTM", len(feature_cols), device)
 
-    # =========================
-    # ⭐预测
-    # =========================
-    with torch.no_grad():
-        pred_rnn = rnn(X_seq).cpu().numpy()
-        pred_lstm = lstm(X_seq).cpu().numpy()
-
-    # BPNN输入处理
-    X_bpnn = X_test[:, -1, :]
-    X_bpnn = torch.tensor(X_bpnn, dtype=torch.float32).to(device)
-
-    with torch.no_grad():
-        pred_bpnn = bpnn(X_bpnn).cpu().numpy()
+    # ========= 预测 =========
+    pred_bpnn = predict(bpnn, X_test_flat, device)
+    pred_rnn = predict(rnn, X_test_seq, device)
+    pred_lstm = predict(lstm, X_test_seq, device)
 
     # ========= 反归一化 =========
-    y_true = inverse_transform_y(scaler_y, y_test)
+    y_true = inverse_transform_y(scaler_y, y_test_flat[:len(pred_bpnn)])
 
     pred_bpnn = inverse_transform_y(scaler_y, pred_bpnn)
-    pred_rnn = inverse_transform_y(scaler_y, pred_rnn)
-    pred_lstm = inverse_transform_y(scaler_y, pred_lstm)
+    pred_rnn = inverse_transform_y(scaler_y, pred_rnn[:len(y_true)])
+    pred_lstm = inverse_transform_y(scaler_y, pred_lstm[:len(y_true)])
+
 
     # =========================
-    # ⭐指标
+    # ⭐图1：预测对比曲线（论文核心图）
     # =========================
-    results = {
-        "BPNN": [rmse(y_true, pred_bpnn), mae(y_true, pred_bpnn), mape(y_true, pred_bpnn)],
-        "RNN":  [rmse(y_true, pred_rnn), mae(y_true, pred_rnn), mape(y_true, pred_rnn)],
-        "LSTM": [rmse(y_true, pred_lstm), mae(y_true, pred_lstm), mape(y_true, pred_lstm)]
-    }
+    plt.figure(figsize=(12,5))
 
-    print("\n===== 模型对比 =====")
-    for k, v in results.items():
-        print(f"{k}: RMSE={v[0]:.3f} MAE={v[1]:.3f} MAPE={v[2]:.2f}")
+    plt.plot(y_true, label="真实值", linewidth=2)
+    plt.plot(pred_bpnn, label="BPNN")
+    plt.plot(pred_rnn, label="RNN")
+    plt.plot(pred_lstm, label="LSTM")
 
-    # =========================
-    # ⭐图1：预测对比
-    # =========================
-    plt.figure(figsize=(12,6))
-    plt.plot(y_true[:300], label="真实值", linewidth=2)
-    plt.plot(pred_bpnn[:300], label="BPNN")
-    plt.plot(pred_rnn[:300], label="RNN")
-    plt.plot(pred_lstm[:300], label="LSTM")
-
-    plt.title("模型预测对比图")
+    plt.title("负荷预测对比图")
     plt.legend()
 
-    p1 = os.path.join(FIG_DIR, f"预测对比_{datetime.now().strftime('%m%d_%H%M')}.png")
-    plt.savefig(p1, dpi=300)
+    path1 = os.path.join(FIG_DIR, "Fig1_预测对比.png")
+    plt.savefig(path1, dpi=300, bbox_inches="tight")
     plt.close()
 
+
     # =========================
-    # ⭐图2：误差柱状图
+    # ⭐图2：误差对比
     # =========================
-    labels = ["RMSE","MAE","MAPE"]
-    x = np.arange(3)
+    def mae_fn(y, p): return np.mean(np.abs(y - p))
+
+    errors = [
+        mae_fn(y_true, pred_bpnn),
+        mae_fn(y_true, pred_rnn),
+        mae_fn(y_true, pred_lstm)
+    ]
 
     plt.figure()
-    plt.bar(x-0.25, results["BPNN"], 0.25, label="BPNN")
-    plt.bar(x,      results["RNN"],  0.25, label="RNN")
-    plt.bar(x+0.25, results["LSTM"], 0.25, label="LSTM")
+    plt.bar(["BPNN", "RNN", "LSTM"], errors)
 
-    plt.xticks(x, labels)
-    plt.title("误差对比")
-    plt.legend()
+    plt.title("MAE误差对比")
 
-    p2 = os.path.join(FIG_DIR, f"误差对比_{datetime.now().strftime('%m%d_%H%M')}.png")
-    plt.savefig(p2, dpi=300)
+    path2 = os.path.join(FIG_DIR, "Fig2_误差对比.png")
+    plt.savefig(path2, dpi=300, bbox_inches="tight")
     plt.close()
 
+
     # =========================
-    # ⭐图3：残差分布（论文加分）
+    # ⭐图3：局部放大（论文必备）
+    # =========================
+    zoom = slice(0, 200)
+
+    plt.figure(figsize=(12,5))
+    plt.plot(y_true[zoom], label="真实")
+    plt.plot(pred_lstm[zoom], label="LSTM")
+
+    plt.title("局部预测效果（LSTM）")
+
+    path3 = os.path.join(FIG_DIR, "Fig3_局部放大.png")
+    plt.savefig(path3, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+    # =========================
+    # ⭐图4：散点图（拟合能力）
     # =========================
     plt.figure()
-    plt.hist(y_true - pred_lstm, bins=50, alpha=0.7)
 
-    plt.title("LSTM残差分布")
-    plt.xlabel("误差")
-    plt.ylabel("频数")
+    plt.scatter(y_true, pred_lstm, alpha=0.5)
 
-    p3 = os.path.join(FIG_DIR, f"残差分布_{datetime.now().strftime('%m%d_%H%M')}.png")
-    plt.savefig(p3, dpi=300)
+    plt.title("LSTM预测拟合散点图")
+
+    path4 = os.path.join(FIG_DIR, "Fig4_散点图.png")
+    plt.savefig(path4, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print("\n已生成论文图：")
-    print(p1)
-    print(p2)
-    print(p3)
+
+    # =========================
+    # 输出指标
+    # =========================
+    logger.info("===== 论文级结果 =====")
+    logger.info(f"BPNN MAE: {mae_fn(y_true, pred_bpnn):.4f}")
+    logger.info(f"RNN  MAE: {mae_fn(y_true, pred_rnn):.4f}")
+    logger.info(f"LSTM MAE: {mae_fn(y_true, pred_lstm):.4f}")
+
+    logger.info("图像已生成（论文四图完成）")
 
 
 if __name__ == "__main__":

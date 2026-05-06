@@ -7,16 +7,15 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-import numpy as np
 import matplotlib.pyplot as plt
-
 from torch.utils.data import DataLoader, TensorDataset
 
 from utils.common import *
-from utils.log import Logger   # ⭐引入日志
+from utils.log import Logger
+
 
 # =========================
-# ⭐中文输出支持
+# ⭐中文支持
 # =========================
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -26,10 +25,9 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 
 # =========================
-# ⭐路径管理
+# ⭐路径
 # =========================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 FIG_DIR = os.path.join(BASE_DIR, "data", "fig")
 MODEL_DIR = os.path.join(BASE_DIR, "model")
 
@@ -38,13 +36,19 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 
 # =========================
-# ⭐日志初始化
+# ⭐模型名
 # =========================
-logger = Logger(BASE_DIR, "lstm_train").get_logger()
+MODEL_NAME = "LSTM"
 
 
 # =========================
-# 1. LSTM模型
+# ⭐日志
+# =========================
+logger = Logger(BASE_DIR, f"{MODEL_NAME.lower()}_train").get_logger()
+
+
+# =========================
+# 1️⃣ LSTM模型
 # =========================
 class LSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size=64, num_layers=2, dropout=0.2):
@@ -72,7 +76,7 @@ class LSTMModel(nn.Module):
 
 
 # =========================
-# 2. 训练函数（日志版）
+# 2️⃣ 训练函数（只保存一个模型）
 # =========================
 def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='cuda'):
 
@@ -84,10 +88,16 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
     train_losses, val_losses = [], []
 
     best_loss = float("inf")
-    best_model = model.state_dict()
+    best_state = model.state_dict()
+
+    best_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_best.pth")
+
+    patience = 5
+    wait = 0
 
     for epoch in range(epochs):
 
+        # ===== train =====
         model.train()
         train_loss = 0
 
@@ -106,7 +116,7 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 
         train_loss /= len(train_loader)
 
-        # ===== 验证 =====
+        # ===== val =====
         model.eval()
         val_loss = 0
 
@@ -127,20 +137,21 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 
         logger.info(f"第 {epoch+1} 轮 | 训练损失: {train_loss:.6f} | 验证损失: {val_loss:.6f}")
 
-        # ===== 保存最佳模型 =====
+        # ===== ⭐保存唯一最佳模型 =====
         if val_loss < best_loss:
             best_loss = val_loss
-            best_model = model.state_dict()
+            best_state = model.state_dict()
+            torch.save(best_state, best_path)
+            logger.info(f"更新最佳模型 -> {best_path}")
+            wait = 0
+        else:
+            wait += 1
 
-            best_path = os.path.join(
-                MODEL_DIR,
-                f"LSTM最佳模型_{datetime.now().strftime('%m%d_%H%M')}.pth"
-            )
+        if wait >= patience:
+            logger.info("早停触发")
+            break
 
-            torch.save(best_model, best_path)
-            logger.info(f"保存最佳模型: {best_path}")
-
-    model.load_state_dict(best_model)
+    model.load_state_dict(best_state)
 
     return model, train_losses, val_losses
 
@@ -151,35 +162,36 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 def plot_loss(train_losses, val_losses):
 
     plt.figure()
-
     plt.plot(train_losses, label="训练损失")
     plt.plot(val_losses, label="验证损失")
 
-    plt.title("训练过程损失变化")
+    plt.title(f"{MODEL_NAME}训练损失曲线")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
 
     path = os.path.join(
         FIG_DIR,
-        f"训练损失曲线_{datetime.now().strftime('%m%d_%H%M')}.png"
+        f"{MODEL_NAME}训练损失曲线.png"
     )
 
     plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"已保存图像: {path}")
+    logger.info(f"图像已保存: {path}")
 
 
 # =========================
-# 3. 主函数
+# 3️⃣ 主函数
 # =========================
 def main():
 
-    logger.info("===== 开始训练 LSTM =====")
+    logger.info(f"===== 开始训练 {MODEL_NAME} =====")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"使用设备: {device}")
 
+    # ========= 数据 =========
     df = load_data("../data/train.xlsx")
     df = df.sort_values("时间").reset_index(drop=True)
 
@@ -213,19 +225,13 @@ def main():
     X_test, y_test = create_sequences(test_x, test_y, seq_len)
 
     train_loader = DataLoader(
-        TensorDataset(
-            torch.tensor(X_train, dtype=torch.float32),
-            torch.tensor(y_train, dtype=torch.float32)
-        ),
+        TensorDataset(torch.tensor(X_train), torch.tensor(y_train)),
         batch_size=64,
         shuffle=True
     )
 
     val_loader = DataLoader(
-        TensorDataset(
-            torch.tensor(X_val, dtype=torch.float32),
-            torch.tensor(y_val, dtype=torch.float32)
-        ),
+        TensorDataset(torch.tensor(X_val), torch.tensor(y_val)),
         batch_size=64,
         shuffle=False
     )

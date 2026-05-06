@@ -7,25 +7,10 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-import numpy as np
 import matplotlib.pyplot as plt
-
 from torch.utils.data import DataLoader, TensorDataset
 
-from utils.common import (
-    load_data,
-    fill_missing,
-    add_time_features,
-    add_holiday_feature,
-    add_season_feature,
-    add_lag_features,
-    split_dataset,
-    normalize_train_val_test,
-    create_sequences,
-    inverse_transform_y,
-    rmse, mae, mape
-)
-
+from utils.common import *
 from utils.log import Logger
 
 
@@ -35,7 +20,7 @@ from utils.log import Logger
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 import matplotlib
-matplotlib.rcParams['font.sans-serif'] = ['SimHei']
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 
@@ -51,23 +36,30 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 
 # =========================
+# ⭐模型名
+# =========================
+MODEL_NAME = "RNN"
+
+
+# =========================
 # ⭐日志
 # =========================
-logger = Logger(BASE_DIR, "rnn").get_logger()
+logger = Logger(BASE_DIR, f"{MODEL_NAME.lower()}_train").get_logger()
 
 
 # =========================
-# 1️⃣ RNN模型（SimpleRNN）
+# 1️⃣ RNN模型
 # =========================
 class RNNModel(nn.Module):
-    def __init__(self, input_size, hidden_size=64, num_layers=2):
+    def __init__(self, input_size, hidden_size=64, num_layers=2, dropout=0.2):
         super().__init__()
 
         self.rnn = nn.RNN(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            batch_first=True
+            batch_first=True,
+            dropout=dropout
         )
 
         self.fc = nn.Sequential(
@@ -84,7 +76,7 @@ class RNNModel(nn.Module):
 
 
 # =========================
-# 2️⃣ 训练函数
+# 2️⃣ 训练函数（只保存一个模型）
 # =========================
 def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='cuda'):
 
@@ -96,7 +88,9 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
     train_losses, val_losses = [], []
 
     best_loss = float("inf")
-    best_model = model.state_dict()
+    best_state = model.state_dict()
+
+    best_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_best.pth")
 
     patience = 5
     wait = 0
@@ -143,10 +137,12 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 
         logger.info(f"第 {epoch+1} 轮 | 训练损失: {train_loss:.6f} | 验证损失: {val_loss:.6f}")
 
-        # ===== early stopping =====
+        # ===== ⭐保存唯一最佳模型 =====
         if val_loss < best_loss:
             best_loss = val_loss
-            best_model = model.state_dict()
+            best_state = model.state_dict()
+            torch.save(best_state, best_path)
+            logger.info(f"更新最佳模型 -> {best_path}")
             wait = 0
         else:
             wait += 1
@@ -155,7 +151,8 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
             logger.info("早停触发")
             break
 
-    model.load_state_dict(best_model)
+    model.load_state_dict(best_state)
+
     return model, train_losses, val_losses
 
 
@@ -165,28 +162,31 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 def plot_loss(train_losses, val_losses):
 
     plt.figure()
-
     plt.plot(train_losses, label="训练损失")
     plt.plot(val_losses, label="验证损失")
 
-    plt.title("RNN训练损失曲线")
+    plt.title(f"{MODEL_NAME}训练损失曲线")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
 
-    name = f"RNN损失曲线_{datetime.now().strftime('%m%d_%H%M')}.png"
-    path = os.path.join(FIG_DIR, name)
+    path = os.path.join(
+        FIG_DIR,
+        f"{MODEL_NAME}训练损失曲线.png"
+    )
 
     plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"图像已保存：{path}")
+    logger.info(f"图像已保存: {path}")
 
 
 # =========================
 # 3️⃣ 主函数
 # =========================
 def main():
+
+    logger.info(f"===== 开始训练 {MODEL_NAME} =====")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"使用设备: {device}")
@@ -201,39 +201,29 @@ def main():
     df = add_season_feature(df)
     df = add_lag_features(df, target="负荷")
 
-    # ========= 特征 =========
     feature_cols = [
         "最高温度℃", "最低温度℃", "平均温度℃",
         "相对湿度(平均)", "降雨量（mm）",
         "hour_sin", "hour_cos",
         "weekday_sin", "weekday_cos",
-        "is_weekend",
-        "is_holiday",
-        "season",
-        "负荷_lag1",
-        "负荷_lag24",
-        "负荷_lag168",
-        "roll_mean_24",
-        "roll_std_24"
+        "is_weekend", "is_holiday", "season",
+        "负荷_lag1", "负荷_lag24", "负荷_lag168",
+        "roll_mean_24", "roll_std_24"
     ]
 
     target_col = "负荷"
 
-    # ========= 划分 =========
     train, val, test = split_dataset(df)
 
-    # ========= 归一化 =========
     train_x, train_y, val_x, val_y, test_x, test_y, scaler_x, scaler_y = \
         normalize_train_val_test(train, val, test, feature_cols, target_col)
 
-    # ========= 序列 =========
     seq_len = 90
 
     X_train, y_train = create_sequences(train_x, train_y, seq_len)
     X_val, y_val = create_sequences(val_x, val_y, seq_len)
     X_test, y_test = create_sequences(test_x, test_y, seq_len)
 
-    # ========= DataLoader =========
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train), torch.tensor(y_train)),
         batch_size=64,
@@ -246,41 +236,26 @@ def main():
         shuffle=False
     )
 
-    # ========= 模型 =========
-    model = RNNModel(input_size=len(feature_cols))
+    model = RNNModel(len(feature_cols))
 
-    # ========= 训练 =========
     model, train_losses, val_losses = train_model(
         model, train_loader, val_loader, device=device
     )
 
-    # ========= 画图 =========
     plot_loss(train_losses, val_losses)
 
     # ========= 测试 =========
     model.eval()
     with torch.no_grad():
-        X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
-        pred = model(X_test_tensor).cpu().numpy()
+        pred = model(torch.tensor(X_test, dtype=torch.float32).to(device)).cpu().numpy()
 
-    # ========= 反归一化 =========
     y_test_inv = inverse_transform_y(scaler_y, y_test)
     pred_inv = inverse_transform_y(scaler_y, pred)
 
-    # ========= 指标 =========
     logger.info("===== 测试结果 =====")
     logger.info(f"RMSE: {rmse(y_test_inv, pred_inv):.4f}")
     logger.info(f"MAE : {mae(y_test_inv, pred_inv):.4f}")
     logger.info(f"MAPE: {mape(y_test_inv, pred_inv):.4f}")
-
-    # ========= 保存模型 =========
-    model_path = os.path.join(
-        MODEL_DIR,
-        f"RNN_{datetime.now().strftime('%m%d_%H%M')}.pth"
-    )
-
-    torch.save(model.state_dict(), model_path)
-    logger.info(f"模型已保存：{model_path}")
 
 
 if __name__ == "__main__":
