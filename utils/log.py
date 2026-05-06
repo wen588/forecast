@@ -4,10 +4,9 @@ import logging
 import os
 from datetime import datetime
 
-
 class Logger:
     """
-    工程级日志系统（每次运行生成唯一log文件）
+    工程级日志系统（文件名：model_time.log）
     """
 
     level_relations = {
@@ -26,7 +25,7 @@ class Logger:
                  console: bool = True):
 
         self.root_path = root_path
-        self.log_name = log_name
+        self.log_name = log_name.split("_")[0]   # ⭐只保留主名（lstm / bpnn / rnn）
         self.level = level
         self.fmt = fmt
         self.console = console
@@ -34,38 +33,31 @@ class Logger:
         self.logger = logging.getLogger(self._get_unique_name())
         self.logger.setLevel(self.level_relations[level])
 
-        # ⭐关键：避免重复 handler
         if not self.logger.handlers:
             self._setup_logger()
 
     def _get_unique_name(self):
-        """
-        防止 logging.getLogger 重复污染
-        """
-        return f"{self.log_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        return f"{self.log_name}_{datetime.now().strftime('%H%M%S')}"
 
     def _setup_logger(self):
 
-        # ========= log目录 =========
         log_dir = os.path.join(self.root_path, "log")
         os.makedirs(log_dir, exist_ok=True)
 
-        # ⭐核心：每次运行唯一文件名
-        time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # ⭐只保留：lstm_153012.log
+        time_str = datetime.now().strftime("%H%M%S")
         log_file = os.path.join(log_dir, f"{self.log_name}_{time_str}.log")
 
         formatter = logging.Formatter(self.fmt)
 
-        # ========= File Handler =========
         file_handler = logging.FileHandler(
             log_file,
-            mode="w",   # ⭐关键：每次运行覆盖写（不会追加旧日志）
+            mode="w",
             encoding="utf-8"
         )
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
 
-        # ========= Console Handler =========
         if self.console:
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(formatter)

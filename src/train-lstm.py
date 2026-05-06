@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
+import joblib
+
 
 from utils.common import *
 from utils.log import Logger
@@ -256,7 +258,8 @@ def main():
     logger.info(f"RMSE: {rmse(y_test_inv, pred_inv):.4f}")
     logger.info(f"MAE : {mae(y_test_inv, pred_inv):.4f}")
     logger.info(f"MAPE: {mape(y_test_inv, pred_inv):.4f}")
-
+    joblib.dump(scaler_x, os.path.join(MODEL_DIR, "scaler_x.pkl"))
+    joblib.dump(scaler_y, os.path.join(MODEL_DIR, "scaler_y.pkl"))
 
 if __name__ == "__main__":
     main()

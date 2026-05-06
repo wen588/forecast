@@ -3,19 +3,17 @@
 import os
 import sys
 import io
-from datetime import datetime
-
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
-import joblib
+
 from utils.common import *
 from utils.log import Logger
-
+from models import LSTMModel   # ⭐统一模型来源
 
 # =========================
-# ⭐中文支持
+# 中文支持
 # =========================
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
@@ -25,7 +23,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 
 # =========================
-# ⭐路径
+# 路径
 # =========================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIG_DIR = os.path.join(BASE_DIR, "data", "fig")
@@ -34,51 +32,20 @@ MODEL_DIR = os.path.join(BASE_DIR, "model")
 os.makedirs(FIG_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
+# =========================
+# 日志
+# =========================
+logger = Logger(BASE_DIR, "lstm_train").get_logger()
 
 # =========================
-# ⭐模型名
+# 模型（已统一在 models.py，这里不再重复）
 # =========================
-MODEL_NAME = "RNN"
-
-
-# =========================
-# ⭐日志
-# =========================
-logger = Logger(BASE_DIR, f"{MODEL_NAME.lower()}_train").get_logger()
 
 
 # =========================
-# 1️⃣ RNN模型
+# 训练函数（稳定版）
 # =========================
-class RNNModel(nn.Module):
-    def __init__(self, input_size, hidden_size=64, num_layers=2, dropout=0.2):
-        super().__init__()
-
-        self.rnn = nn.RNN(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout
-        )
-
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_size, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 1)
-        )
-
-    def forward(self, x):
-        out, _ = self.rnn(x)
-        out = out[:, -1, :]
-        return self.fc(out)
-
-
-# =========================
-# 2️⃣ 训练函数（只保存一个模型）
-# =========================
-def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='cuda'):
+def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device="cuda"):
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -88,25 +55,24 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
     train_losses, val_losses = [], []
 
     best_loss = float("inf")
-    best_state = model.state_dict()
+    best_state = None
 
-    best_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_best.pth")
+    best_path = os.path.join(MODEL_DIR, "LSTM_best.pth")  # ⭐固定名字
 
     patience = 5
     wait = 0
 
     for epoch in range(epochs):
 
-        # ===== train =====
+        # ========= train =========
         model.train()
         train_loss = 0
 
-        for X_batch, y_batch in train_loader:
-            X_batch = X_batch.to(device).float()
-            y_batch = y_batch.to(device).float()
+        for x, y in train_loader:
+            x, y = x.to(device).float(), y.to(device).float()
 
-            pred = model(X_batch)
-            loss = criterion(pred, y_batch)
+            pred = model(x)
+            loss = criterion(pred, y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -116,33 +82,31 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 
         train_loss /= len(train_loader)
 
-        # ===== val =====
+        # ========= val =========
         model.eval()
         val_loss = 0
 
         with torch.no_grad():
-            for X_batch, y_batch in val_loader:
-                X_batch = X_batch.to(device).float()
-                y_batch = y_batch.to(device).float()
-
-                pred = model(X_batch)
-                loss = criterion(pred, y_batch)
-
-                val_loss += loss.item()
+            for x, y in val_loader:
+                x, y = x.to(device).float(), y.to(device).float()
+                pred = model(x)
+                val_loss += criterion(pred, y).item()
 
         val_loss /= len(val_loader)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        logger.info(f"第 {epoch+1} 轮 | 训练损失: {train_loss:.6f} | 验证损失: {val_loss:.6f}")
+        logger.info(f"[LSTM] Epoch {epoch+1} | Train {train_loss:.6f} | Val {val_loss:.6f}")
 
-        # ===== ⭐保存唯一最佳模型 =====
+        # ========= 保存唯一最佳模型 =========
         if val_loss < best_loss:
             best_loss = val_loss
             best_state = model.state_dict()
+
             torch.save(best_state, best_path)
-            logger.info(f"更新最佳模型 -> {best_path}")
+            logger.info(f"✔ 更新最佳模型: {best_path}")
+
             wait = 0
         else:
             wait += 1
@@ -157,39 +121,32 @@ def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device='c
 
 
 # =========================
-# ⭐画图
+# 画图
 # =========================
 def plot_loss(train_losses, val_losses):
 
     plt.figure()
-    plt.plot(train_losses, label="训练损失")
-    plt.plot(val_losses, label="验证损失")
+    plt.plot(train_losses, label="train")
+    plt.plot(val_losses, label="val")
 
-    plt.title(f"{MODEL_NAME}训练损失曲线")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.title("LSTM Loss Curve")
     plt.legend()
 
-    path = os.path.join(
-        FIG_DIR,
-        f"{MODEL_NAME}训练损失曲线.png"
-    )
-
+    path = os.path.join(FIG_DIR, "LSTM_loss.png")
     plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"图像已保存: {path}")
+    logger.info(f"✔ 保存曲线: {path}")
 
 
 # =========================
-# 3️⃣ 主函数
+# 主函数
 # =========================
 def main():
 
-    logger.info(f"===== 开始训练 {MODEL_NAME} =====")
+    logger.info("===== LSTM训练开始 =====")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"使用设备: {device}")
 
     # ========= 数据 =========
     df = load_data("../data/train.xlsx")
@@ -213,17 +170,20 @@ def main():
 
     target_col = "负荷"
 
+    # ========= 划分 =========
     train, val, test = split_dataset(df)
 
     train_x, train_y, val_x, val_y, test_x, test_y, scaler_x, scaler_y = \
         normalize_train_val_test(train, val, test, feature_cols, target_col)
 
+    # ========= 序列 =========
     seq_len = 90
 
     X_train, y_train = create_sequences(train_x, train_y, seq_len)
     X_val, y_val = create_sequences(val_x, val_y, seq_len)
     X_test, y_test = create_sequences(test_x, test_y, seq_len)
 
+    # ========= DataLoader =========
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train), torch.tensor(y_train)),
         batch_size=64,
@@ -236,12 +196,15 @@ def main():
         shuffle=False
     )
 
-    model = RNNModel(len(feature_cols))
+    # ========= 模型 =========
+    model = LSTMModel(input_size=len(feature_cols))
 
+    # ========= 训练 =========
     model, train_losses, val_losses = train_model(
         model, train_loader, val_loader, device=device
     )
 
+    # ========= 曲线 =========
     plot_loss(train_losses, val_losses)
 
     # ========= 测试 =========
@@ -249,15 +212,14 @@ def main():
     with torch.no_grad():
         pred = model(torch.tensor(X_test, dtype=torch.float32).to(device)).cpu().numpy()
 
-    y_test_inv = inverse_transform_y(scaler_y, y_test)
-    pred_inv = inverse_transform_y(scaler_y, pred)
+    y_true = inverse_transform_y(scaler_y, y_test)
+    pred = inverse_transform_y(scaler_y, pred)
 
     logger.info("===== 测试结果 =====")
-    logger.info(f"RMSE: {rmse(y_test_inv, pred_inv):.4f}")
-    logger.info(f"MAE : {mae(y_test_inv, pred_inv):.4f}")
-    logger.info(f"MAPE: {mape(y_test_inv, pred_inv):.4f}")
-    joblib.dump(scaler_x, os.path.join(MODEL_DIR, "scaler_x.pkl"))
-    joblib.dump(scaler_y, os.path.join(MODEL_DIR, "scaler_y.pkl"))
+    logger.info(f"RMSE: {rmse(y_true, pred):.4f}")
+    logger.info(f"MAE : {mae(y_true, pred):.4f}")
+    logger.info(f"MAPE: {mape(y_true, pred):.4f}")
+
 
 if __name__ == "__main__":
     main()
