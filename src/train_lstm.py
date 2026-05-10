@@ -120,8 +120,7 @@ def main():
     train_loader = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(y_train)), batch_size=64, shuffle=True)
     val_loader = DataLoader(TensorDataset(torch.tensor(X_val), torch.tensor(y_val)), batch_size=64, shuffle=False)
 
-    mo
-    del = LSTMModel(len(feature_cols))
+    model = LSTMModel(len(feature_cols))
     model, train_losses, val_losses = train_model(model, train_loader, val_loader, device=device)
     plot_loss(train_losses, val_losses)
 
