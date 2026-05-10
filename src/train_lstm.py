@@ -29,7 +29,7 @@ os.makedirs(FIG_DIR, exist_ok=True)
 logger = Logger(BASE_DIR, "lstm_train").get_logger()
 
 # 训练函数
-def train_model(model, train_loader, val_loader, epochs=30, lr=0.0005, device="cuda"):
+def train_model(model, train_loader, val_loader, epochs=20, lr=0.001, device="cuda"):
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     model.to(device)
@@ -110,7 +110,8 @@ def main():
 
     target_col = "负荷"
     train, val, test = split_dataset(df)
-    train_x, train_y, val_x, val_y, test_x, test_y, scaler_x, scaler_y = normalize_train_val_test(train, val, test, feature_cols, target_col)
+    train_x, train_y, val_x, val_y, test_x, test_y, scaler_x, scaler_y = normalize_train_val_test(train, val, test,
+                                                                                                  feature_cols, target_col)
 
     X_train, y_train = create_sequences(train_x, train_y, 90)
     X_val, y_val = create_sequences(val_x, val_y, 90)
@@ -119,7 +120,8 @@ def main():
     train_loader = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(y_train)), batch_size=64, shuffle=True)
     val_loader = DataLoader(TensorDataset(torch.tensor(X_val), torch.tensor(y_val)), batch_size=64, shuffle=False)
 
-    model = LSTMModel(len(feature_cols))
+    mo
+    del = LSTMModel(len(feature_cols))
     model, train_losses, val_losses = train_model(model, train_loader, val_loader, device=device)
     plot_loss(train_losses, val_losses)
 

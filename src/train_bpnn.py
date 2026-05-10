@@ -27,7 +27,7 @@ logger = Logger(BASE_DIR, "bpnn_train").get_logger()
 # =========================
 # ⭐训练函数
 # =========================
-def train_model(model, train_loader, val_loader, epochs=30, lr=0.001, device="cuda"):
+def train_model(model, train_loader, val_loader, epochs=20, lr=0.001, device="cuda"):
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
